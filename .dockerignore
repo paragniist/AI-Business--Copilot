@@ -1,0 +1,10 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+.env
+.git
+faiss_index/
+faiss_indexes/
+data/
+Frontend/node_modules/
