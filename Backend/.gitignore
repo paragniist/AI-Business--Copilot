@@ -6,3 +6,10 @@ __pycache__/
 *.pyo
 .pytest_cache/
 *.pkl
+# Coverage and pytest artifacts
+.coverage
+htmlcov/
+.pytest_cache/
+__pycache__/
+*.pyc
+data/*.pdf
