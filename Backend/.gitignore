@@ -13,3 +13,4 @@ htmlcov/
 __pycache__/
 *.pyc
 data/*.pdf
+env.yaml
