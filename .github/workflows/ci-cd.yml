@@ -1,0 +1,80 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: Backend
+    env:
+      GROQ_API_KEY: test-dummy-key
+      SUPABASE_URL: https://test.supabase.co
+      SUPABASE_SERVICE_KEY: test-dummy-key
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: "Backend/uv.lock"
+
+      - name: Install dependencies
+        run: uv sync --all-groups
+
+      - name: Run tests
+        run: uv run pytest --cov --cov-report=term-missing
+
+  deploy:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: Backend
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Create env.yaml from secrets
+        run: |
+          cat > env.yaml <<EOF
+          GROQ_API_KEY: "${{ secrets.GROQ_API_KEY }}"
+          SUPABASE_URL: "${{ secrets.SUPABASE_URL }}"
+          SUPABASE_SERVICE_KEY: "${{ secrets.SUPABASE_SERVICE_KEY }}"
+          EOF
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy ai-business-copilot \
+            --source . \
+            --region asia-south1 \
+            --platform managed \
+            --allow-unauthenticated \
+            --memory 2Gi \
+            --cpu 1 \
+            --timeout 300 \
+            --env-vars-file env.yaml \
+            --project ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Show deployed URL
+        run: |
+          gcloud run services describe ai-business-copilot \
+            --region asia-south1 \
+            --project ${{ secrets.GCP_PROJECT_ID }} \
+            --format='value(status.url)'
