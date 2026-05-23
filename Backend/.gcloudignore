@@ -1,0 +1,40 @@
+# Tell gcloud what NOT to upload to Cloud Build.
+# Without this file, gcloud falls back to .gitignore + git, which fails
+# in CI because git can't authenticate to GitHub.
+
+# Git internals (the source of the original problem)
+.git
+.gitignore
+.github
+
+# Python build artifacts
+__pycache__
+*.pyc
+.venv
+*.egg-info
+
+# Testing artifacts (not needed in production image)
+tests
+.pytest_cache
+.coverage
+htmlcov
+
+# Local data (FAISS index built per-user at runtime)
+data
+faiss_index
+faiss_indexes
+*.pdf
+*.pkl
+
+# Secrets (must NEVER reach Cloud Build)
+.env
+.env.*
+env.yaml
+
+# Docker meta files
+.dockerignore
+
+# Project housekeeping
+README.md
+*.md
+test_run.py
