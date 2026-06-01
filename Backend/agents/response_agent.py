@@ -23,6 +23,25 @@ def clean_output(text: str) -> str:
     text = re.sub(r'<[^>]+>', '', text)
     return text.strip()
 
+def build_lookup_prompt(state: BusinessState) -> str:
+    """Build the lookup prompt — extracted so the streaming endpoint can reuse it."""
+    return f"""You are a business analyst. Answer this question clearly and concisely 
+using ONLY the context provided below.
+
+Rules:
+- Give a direct answer in 2-4 sentences maximum
+- Extract only the relevant facts
+- Do not dump raw text or repeat yourself
+- If the answer has a number or metric, highlight it clearly
+- Do not use HTML tags like <br> in your response
+
+Question: {state['query']}
+
+Context:
+{state['context']}
+
+Give a clean, direct answer:"""
+
 def response_agent(state: BusinessState) -> BusinessState:
     print("[Response] Formatting final output...")
 
@@ -46,22 +65,7 @@ def response_agent(state: BusinessState) -> BusinessState:
 
     # ── Lookup path ───────────────────────────────────────────
     elif intent == "lookup":
-        prompt = f"""You are a business analyst. Answer this question clearly and concisely 
-using ONLY the context provided below.
-
-Rules:
-- Give a direct answer in 2-4 sentences maximum
-- Extract only the relevant facts
-- Do not dump raw text or repeat yourself
-- If the answer has a number or metric, highlight it clearly
-- Do not use HTML tags like <br> in your response
-
-Question: {state['query']}
-
-Context:
-{state['context']}
-
-Give a clean, direct answer:"""
+        prompt = build_lookup_prompt(state)
 
         clean_answer = llm.invoke(prompt).content
         clean_answer = clean_output(clean_answer)

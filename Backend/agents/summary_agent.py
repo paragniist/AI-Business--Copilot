@@ -8,10 +8,8 @@ llm = ChatGroq(
     temperature=0
 )
 
-def summary_agent(state: BusinessState) -> BusinessState:
-    print("[Summary] Condensing document context...")
-
-    prompt = f"""
+def build_summary_prompt(state: BusinessState) -> str:
+    return f"""
 You are a business document summarizer.
 Summarize the following content clearly and concisely.
 
@@ -27,6 +25,10 @@ Provide:
 4. Main conclusions or takeaways
 """
 
+
+def summary_agent(state: BusinessState) -> BusinessState:
+    print("[Summary] Condensing document context...")
+    prompt = build_summary_prompt(state)
     summary = llm.invoke(prompt).content
     print("[Summary] Summary complete")
     return {**state, "summary": summary}

@@ -149,52 +149,91 @@ def health():
     return {"status": "running"}
 
 
+import json
 from fastapi.responses import StreamingResponse
-from langchain_groq import ChatGroq
 
-streaming_llm = ChatGroq(model="openai/gpt-oss-120b", temperature=0)
+
+# Map your existing graph node names to friendly status messages
+NODE_STATUS = {
+    "router": "Categorizing query...",
+    "research_analysis": "Searching your documents...",
+    "research_lookup": "Searching your documents...",
+    "research_summarize": "Searching your documents...",
+    "research_dashboard": "Searching your documents...",
+    "analyze": "Analyzing data...",
+    "strategy": "Generating recommendations...",
+    "summarize": "Summarizing documents...",
+    "extract_data": "Extracting metrics...",
+    "generate_dashboard": "Building dashboard...",
+    "respond": "Formatting response...",
+}
 
 
 @app.post("/analyze/stream")
 async def analyze_stream(request: QueryRequest, authorization: str = Header(...)):
-    from agents.router_agent import router_agent
-    from agents.research_agent import research_agent
+    from workflows.langgraph_flow import build_graph
 
     user_id = get_user_id(authorization)
+    llm_requests_total.inc()
 
-    state = {
+    graph = build_graph()
+    initial_state = {
         "query": request.query,
         "user_id": user_id,
-        "intent": None, "context": None, "analysis": None,
-        "recommendations": None, "summary": None,
-        "extracted_data": None, "dashboard_code": None,
+        "intent": None,
+        "context": None,
+        "analysis": None,
+        "recommendations": None,
+        "summary": None,
+        "extracted_data": None,
+        "dashboard_code": None,
         "final_response": None,
     }
-    state = router_agent(state)
-    state = research_agent(state)
 
-    prompt = f"""You are a business analyst. Answer this question clearly and concisely using ONLY the context provided.
-
-Question: {state['query']}
-
-Context: {state['context']}
-
-Give a clean, direct answer in 2-4 sentences:"""
+    def sse(event_type: str, **kwargs) -> str:
+        return f"data: {json.dumps({'type': event_type, **kwargs})}\n\n"
 
     async def event_stream():
         full_response = ""
-        async for chunk in streaming_llm.astream(prompt):
-            if chunk.content:
-                full_response += chunk.content
-                yield chunk.content
-        # After streaming finishes, persist to Supabase
-        save_history(user_id, request.query, full_response)
+        try:
+            async for event in graph.astream_events(initial_state, version="v2"):
+                kind = event["event"]
+                node_name = event.get("name", "")
+
+                # Status update when a known node starts
+                if kind == "on_chain_start" and node_name in NODE_STATUS:
+                    yield sse("status", text=NODE_STATUS[node_name])
+
+                # When the router finishes, broadcast the detected intent
+                elif kind == "on_chain_end" and node_name == "router":
+                    output = event.get("data", {}).get("output", {})
+                    intent = output.get("intent") if isinstance(output, dict) else None
+                    if intent:
+                        yield sse("intent", intent=intent)
+
+                # Token-by-token LLM streaming
+                elif kind == "on_chat_model_stream":
+                    chunk = event["data"]["chunk"]
+                    token = getattr(chunk, "content", "") or ""
+                    if token:
+                        full_response += token
+                        yield sse("content", text=token)
+
+            # Save history once stream completes
+            save_history(user_id, request.query, full_response)
+            yield sse("done")
+
+        except Exception as e:
+            llm_errors_total.inc()
+            yield sse("error", text=str(e))
 
     return StreamingResponse(
         event_stream(),
-        media_type="text/plain",
+        media_type="text/event-stream",
         headers={"X-Accel-Buffering": "no"},
     )
+
+
 
 
 @app.post("/analyze")
