@@ -2,7 +2,7 @@
 
 import { useState, useCallback } from 'react';
 import { Message } from '@/lib/types';
-import { analyzeQuery, getHistory } from '@/lib/api';
+import { analyzeQuery, analyzeStream, getHistory } from '@/lib/api';
 import { useAuth } from './useAuth';
 
 interface UseChatReturn {
@@ -13,6 +13,21 @@ interface UseChatReturn {
   sendQuery: (query: string) => Promise<void>;
   loadHistory: () => Promise<void>;
   clearMessages: () => void;
+}
+
+// Mirrors the backend router's dashboard keyword list.
+// If any of these appear in the query, we use the non-streaming endpoint
+// so the dashboard can be rendered as a chart instead of streamed as text.
+const DASHBOARD_KEYWORDS = [
+  'dashboard', 'chart', 'plot', 'graph', 'visualize',
+  'visualization', 'visual', 'kpi', 'metrics chart',
+  'show me a', 'generate a chart', 'bar chart',
+  'line chart', 'pie chart', 'trend chart',
+];
+
+function isDashboardQuery(query: string): boolean {
+  const lower = query.toLowerCase();
+  return DASHBOARD_KEYWORDS.some((kw) => lower.includes(kw));
 }
 
 export function useChat(): UseChatReturn {
@@ -61,43 +76,62 @@ export function useChat(): UseChatReturn {
         setMessages((prev) => [...prev, userMessage]);
         setCurrentQuery('');
 
-        // Get AI response
-        const response = await analyzeQuery(query, token);
+        // ── Dashboard queries → non-streaming /analyze endpoint ────────
+        if (isDashboardQuery(query)) {
+          const response = await analyzeQuery(query, token);
 
-        if (response.success) {
-          // ── Dashboard response ─────────────────────────────
-          if (response.isDashboard) {
-            const dashboardMessage: Message = {
-              id: `msg-${Date.now()}-dashboard`,
-              role: 'assistant',
-              content: 'Dashboard generated from your documents',
-              intent: 'dashboard',
-              timestamp: new Date(),
-              dashboardCode: response.dashboardCode,
-              dashboardTitle: response.dashboardTitle || 'Business Dashboard',
-            };
-            setMessages((prev) => [...prev, dashboardMessage]);
-
-          // ── Text response ──────────────────────────────────
+          if (response.success) {
+            if (response.isDashboard) {
+              const dashboardMessage: Message = {
+                id: `msg-${Date.now()}-dashboard`,
+                role: 'assistant',
+                content: 'Dashboard generated from your documents',
+                intent: 'dashboard',
+                timestamp: new Date(),
+                dashboardCode: response.dashboardCode,
+                dashboardTitle: response.dashboardTitle || 'Business Dashboard',
+              };
+              setMessages((prev) => [...prev, dashboardMessage]);
+            } else {
+              const assistantMessage: Message = {
+                id: `msg-${Date.now()}-response`,
+                role: 'assistant',
+                content: response.data?.response || 'No response',
+                intent: response.intent as any,
+                timestamp: new Date(),
+              };
+              setMessages((prev) => [...prev, assistantMessage]);
+            }
           } else {
-            const assistantMessage: Message = {
-              id: `msg-${Date.now()}-response`,
+            const errorMessage: Message = {
+              id: `msg-${Date.now()}-error`,
               role: 'assistant',
-              content: response.data?.response || 'No response',
-              intent: response.intent as any,
+              content: `Error: ${response.error || 'Failed to process query'}`,
               timestamp: new Date(),
             };
-            setMessages((prev) => [...prev, assistantMessage]);
+            setMessages((prev) => [...prev, errorMessage]);
           }
+          return;
+        }
 
-        } else {
-          const errorMessage: Message = {
-            id: `msg-${Date.now()}-error`,
-            role: 'assistant',
-            content: `Error: ${response.error || 'Failed to process query'}`,
-            timestamp: new Date(),
-          };
-          setMessages((prev) => [...prev, errorMessage]);
+        // ── All other queries → streaming /analyze/stream endpoint ─────
+        const assistantId = `msg-${Date.now()}-response`;
+        const assistantMessage: Message = {
+          id: assistantId,
+          role: 'assistant',
+          content: '',
+          timestamp: new Date(),
+        };
+        setMessages((prev) => [...prev, assistantMessage]);
+
+        let fullText = '';
+        for await (const chunk of analyzeStream(query, token)) {
+          fullText += chunk;
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId ? { ...m, content: fullText } : m
+            )
+          );
         }
       } catch (error) {
         console.error('[v0] Error sending query:', error);

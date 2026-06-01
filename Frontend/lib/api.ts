@@ -64,6 +64,26 @@ export async function analyzeQuery(
   return res;
 }
 
+export async function* analyzeStream(query: string, token: string) {
+  const res = await fetch(`${API_URL}/analyze/stream`, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ query }),
+  });
+
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    yield decoder.decode(value, { stream: true });
+  }
+}
+
 // ── Get history ───────────────────────────────────────────────
 export async function getHistory(
   token: string

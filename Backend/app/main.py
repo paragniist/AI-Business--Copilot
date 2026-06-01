@@ -5,6 +5,8 @@ from workflows.langgraph_flow import run_copilot
 from dotenv import load_dotenv
 from prometheus_fastapi_instrumentator import Instrumentator
 from prometheus_client import Counter, Histogram
+from fastapi.responses import StreamingResponse
+import asyncio
 
 import httpx
 import os
@@ -145,6 +147,54 @@ def get_history_from_db(user_id: str):
 @app.get("/health")
 def health():
     return {"status": "running"}
+
+
+from fastapi.responses import StreamingResponse
+from langchain_groq import ChatGroq
+
+streaming_llm = ChatGroq(model="openai/gpt-oss-120b", temperature=0)
+
+
+@app.post("/analyze/stream")
+async def analyze_stream(request: QueryRequest, authorization: str = Header(...)):
+    from agents.router_agent import router_agent
+    from agents.research_agent import research_agent
+
+    user_id = get_user_id(authorization)
+
+    state = {
+        "query": request.query,
+        "user_id": user_id,
+        "intent": None, "context": None, "analysis": None,
+        "recommendations": None, "summary": None,
+        "extracted_data": None, "dashboard_code": None,
+        "final_response": None,
+    }
+    state = router_agent(state)
+    state = research_agent(state)
+
+    prompt = f"""You are a business analyst. Answer this question clearly and concisely using ONLY the context provided.
+
+Question: {state['query']}
+
+Context: {state['context']}
+
+Give a clean, direct answer in 2-4 sentences:"""
+
+    async def event_stream():
+        full_response = ""
+        async for chunk in streaming_llm.astream(prompt):
+            if chunk.content:
+                full_response += chunk.content
+                yield chunk.content
+        # After streaming finishes, persist to Supabase
+        save_history(user_id, request.query, full_response)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/plain",
+        headers={"X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/analyze")
