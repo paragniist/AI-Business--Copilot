@@ -64,23 +64,54 @@ export async function analyzeQuery(
   return res;
 }
 
-export async function* analyzeStream(query: string, token: string) {
+// ── Stream events from /analyze/stream (SSE-parsed) ───────────
+export type StreamEvent =
+  | { type: 'status'; text: string }
+  | { type: 'intent'; intent: string }
+  | { type: 'content'; text: string }
+  | { type: 'error'; text: string }
+  | { type: 'done' };
+
+export async function* analyzeStream(
+  query: string,
+  token: string
+): AsyncGenerator<StreamEvent> {
   const res = await fetch(`${API_URL}/analyze/stream`, {
-    method: "POST",
+    method: 'POST',
     headers: {
-      "Authorization": `Bearer ${token}`,
-      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
     },
     body: JSON.stringify({ query }),
   });
 
-  const reader = res.body!.getReader();
+  if (!res.body) return;
+
+  const reader = res.body.getReader();
   const decoder = new TextDecoder();
+  let buffer = '';
 
   while (true) {
     const { value, done } = await reader.read();
     if (done) break;
-    yield decoder.decode(value, { stream: true });
+
+    buffer += decoder.decode(value, { stream: true });
+
+    // SSE events end with \n\n
+    const events = buffer.split('\n\n');
+    buffer = events.pop() || ''; // last partial event stays in buffer
+
+    for (const event of events) {
+      if (!event.startsWith('data: ')) continue;
+      const data = event.slice(6); // strip "data: " prefix
+      try {
+        const parsed: StreamEvent = JSON.parse(data);
+        yield parsed;
+        if (parsed.type === 'done') return;
+      } catch {
+        // skip malformed events
+      }
+    }
   }
 }
 

@@ -9,6 +9,7 @@ interface UseChatReturn {
   messages: Message[];
   isLoading: boolean;
   currentQuery: string;
+  streamStatus: string;
   setCurrentQuery: (query: string) => void;
   sendQuery: (query: string) => Promise<void>;
   loadHistory: () => Promise<void>;
@@ -34,6 +35,7 @@ export function useChat(): UseChatReturn {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [currentQuery, setCurrentQuery] = useState('');
+  const [streamStatus, setStreamStatus] = useState('');
   const { user } = useAuth();
 
   const loadHistory = useCallback(async () => {
@@ -59,6 +61,7 @@ export function useChat(): UseChatReturn {
       if (!user || !query.trim()) return;
 
       setIsLoading(true);
+      setStreamStatus('');
       try {
         const token = await getAuthToken();
         if (!token) {
@@ -125,13 +128,38 @@ export function useChat(): UseChatReturn {
         setMessages((prev) => [...prev, assistantMessage]);
 
         let fullText = '';
-        for await (const chunk of analyzeStream(query, token)) {
-          fullText += chunk;
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantId ? { ...m, content: fullText } : m
-            )
-          );
+        let detectedIntent: string | undefined;
+
+        for await (const event of analyzeStream(query, token)) {
+          if (event.type === 'status') {
+            setStreamStatus(event.text);
+          } else if (event.type === 'intent') {
+            detectedIntent = event.intent;
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId
+                  ? { ...m, intent: detectedIntent as any }
+                  : m
+              )
+            );
+          } else if (event.type === 'content') {
+            fullText += event.text;
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId ? { ...m, content: fullText } : m
+              )
+            );
+          } else if (event.type === 'error') {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId
+                  ? { ...m, content: `Error: ${event.text}` }
+                  : m
+              )
+            );
+          } else if (event.type === 'done') {
+            break;
+          }
         }
       } catch (error) {
         console.error('[v0] Error sending query:', error);
@@ -144,6 +172,7 @@ export function useChat(): UseChatReturn {
         setMessages((prev) => [...prev, errorMessage]);
       } finally {
         setIsLoading(false);
+        setStreamStatus('');
       }
     },
     [user]
@@ -158,6 +187,7 @@ export function useChat(): UseChatReturn {
     messages,
     isLoading,
     currentQuery,
+    streamStatus,
     setCurrentQuery,
     sendQuery,
     loadHistory,
