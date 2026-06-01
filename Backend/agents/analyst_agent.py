@@ -3,15 +3,11 @@ from workflows.state import BusinessState
 from dotenv import load_dotenv
 
 load_dotenv()
-llm = ChatGroq(
-    model="openai/gpt-oss-120b",  
-    temperature=0
-)
+llm = ChatGroq(model="openai/gpt-oss-120b", temperature=0)
 
-def analyst_agent(state: BusinessState) -> BusinessState:
-    print("[Analyst] Analyzing retrieved context...")
 
-    prompt = f"""
+def build_analyst_prompt(state: BusinessState) -> str:
+    return f"""
 You are a senior business analyst.
 Based on the context below, analyze the query thoroughly.
 
@@ -29,6 +25,10 @@ Provide:
 Be specific and data-backed.
 """
 
+
+def analyst_agent(state: BusinessState) -> BusinessState:
+    print("[Analyst] Analyzing retrieved context...")
+    prompt = build_analyst_prompt(state)
     analysis = llm.invoke(prompt).content
     print("[Analyst] Analysis complete")
     return {**state, "analysis": analysis}
