@@ -153,7 +153,7 @@ import json
 from fastapi.responses import StreamingResponse
 
 
-# Map your existing graph node names to friendly status messages
+# Map graph node names to friendly status messages
 NODE_STATUS = {
     "router": "Categorizing query...",
     "research_analysis": "Searching your documents...",
@@ -167,6 +167,10 @@ NODE_STATUS = {
     "generate_dashboard": "Building dashboard...",
     "respond": "Formatting response...",
 }
+
+# Only stream LLM tokens to the user from these nodes.
+# Internal calls (router fallback, query expander, data extractor, etc.) get filtered out.
+USER_FACING_NODES = {"analyze", "strategy", "summarize", "respond"}
 
 
 @app.post("/analyze/stream")
@@ -195,31 +199,54 @@ async def analyze_stream(request: QueryRequest, authorization: str = Header(...)
 
     async def event_stream():
         full_response = ""
+        detected_intent = None
         try:
             async for event in graph.astream_events(initial_state, version="v2"):
                 kind = event["event"]
                 node_name = event.get("name", "")
+                metadata = event.get("metadata") or {}
+                current_node = metadata.get("langgraph_node", "")
 
-                # Status update when a known node starts
+                # Status update when a known graph node starts
                 if kind == "on_chain_start" and node_name in NODE_STATUS:
                     yield sse("status", text=NODE_STATUS[node_name])
 
-                # When the router finishes, broadcast the detected intent
+                # When router finishes, broadcast detected intent
                 elif kind == "on_chain_end" and node_name == "router":
-                    output = event.get("data", {}).get("output", {})
-                    intent = output.get("intent") if isinstance(output, dict) else None
-                    if intent:
-                        yield sse("intent", intent=intent)
+                    output = event.get("data", {}).get("output") or {}
+                    if isinstance(output, dict):
+                        detected_intent = output.get("intent")
+                        if detected_intent:
+                            yield sse("intent", intent=detected_intent)
 
-                # Token-by-token LLM streaming
+                # Token-by-token LLM streaming — ONLY from user-facing nodes
                 elif kind == "on_chat_model_stream":
+                    if current_node not in USER_FACING_NODES:
+                        continue  # skip router fallback, query expander, extract_data, etc.
                     chunk = event["data"]["chunk"]
                     token = getattr(chunk, "content", "") or ""
                     if token:
                         full_response += token
                         yield sse("content", text=token)
 
-            # Save history once stream completes
+                # When respond node finishes, handle dashboard intent with a special event
+                elif kind == "on_chain_end" and node_name == "respond":
+                    output = event.get("data", {}).get("output") or {}
+                    if isinstance(output, dict) and detected_intent == "dashboard":
+                        final = output.get("final_response", "")
+                        try:
+                            dashboard_data = json.loads(final)
+                            yield sse(
+                                "dashboard",
+                                code=dashboard_data.get("code", ""),
+                                title=dashboard_data.get("title", "Business Dashboard"),
+                            )
+                            full_response = "Dashboard generated from your documents"
+                        except Exception:
+                            fallback = "Dashboard generation failed. Try a query like 'show me a sales dashboard'."
+                            yield sse("content", text=fallback)
+                            full_response = fallback
+
             save_history(user_id, request.query, full_response)
             yield sse("done")
 
@@ -232,7 +259,6 @@ async def analyze_stream(request: QueryRequest, authorization: str = Header(...)
         media_type="text/event-stream",
         headers={"X-Accel-Buffering": "no"},
     )
-
 
 
 
